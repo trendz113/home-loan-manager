@@ -1,0 +1,13 @@
+__pycache__/
+*.pyc
+.env
+.venv/
+venv/
+.DS_Store
+*.log
+leads.xlsx
+rates.json
+backup/venv/
+backup/.env
+backup/backups/
+backup/backup.log
