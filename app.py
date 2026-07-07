@@ -6,7 +6,7 @@ Mirrors the Tax Notice Shield / Insurance Mitra Railway deployment pattern:
 - Deterministic rules engine (EMI math) in Python, no AI needed for this tool
 - Flask + gunicorn, single service on Railway
 - Razorpay order creation done server-side only (key_secret never touches the frontend)
-- Leads posted to a Google Sheet via an Apps Script webhook (same pattern as other products)
+- Leads appended as rows to an Excel file (leads.xlsx) — see /admin/leads to download
 
 Env vars required (set these in Railway, and locally in .env):
   RAZORPAY_KEY_ID
@@ -194,7 +194,7 @@ def api_verify_payment():
     Call this from the Razorpay checkout `handler` callback with:
       { razorpay_order_id, razorpay_payment_id, razorpay_signature, lead: {...}, calc: {...} }
     Verifies the signature server-side, then forwards the lead (with payment_id)
-    to the Google Sheet webhook so it becomes an actual DSA-routable lead.
+    to leads.xlsx so it becomes an actual DSA-routable lead.
     """
     if not razorpay_client:
         return jsonify({"error": "Payments are not configured on this server yet."}), 503
