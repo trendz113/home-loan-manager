@@ -14,16 +14,20 @@ Env vars required (set these in Railway, and locally in .env):
   LEADS_FILE_PATH            -> optional, defaults to ./leads.xlsx
                                  point this at a Railway Volume mount (e.g. /data/leads.xlsx)
                                  so leads survive redeploys — see README.
-  ADMIN_TOKEN                -> secret used to protect the /admin/leads download route
+  RATES_FILE_PATH            -> optional, defaults to ./rates.json
+                                 point this at the same Volume (e.g. /data/rates.json) so
+                                 lender rate edits survive redeploys too — see README.
+  ADMIN_TOKEN                -> secret used to protect the /admin/leads and /admin/rates routes
   REPORT_PRICE_PAISE         -> optional, defaults to 14900 (₹149)
   PORT                       -> set by Railway automatically
 """
 
 import os
+import json
 import logging
 import threading
 
-from flask import Flask, render_template, request, jsonify, send_file, abort
+from flask import Flask, render_template, request, jsonify, send_file, abort, Response
 from flask_cors import CORS
 import razorpay
 from openpyxl import Workbook, load_workbook
@@ -46,6 +50,7 @@ REPORT_PRICE_PAISE = int(os.environ.get("REPORT_PRICE_PAISE", "14900"))  # ₹14
 # redeploys. Defaults to a local file for quick testing, which will NOT persist
 # on Railway without a volume attached.
 LEADS_FILE_PATH = os.environ.get("LEADS_FILE_PATH", os.path.join(os.path.dirname(__file__), "leads.xlsx"))
+RATES_FILE_PATH = os.environ.get("RATES_FILE_PATH", os.path.join(os.path.dirname(__file__), "rates.json"))
 ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN", "")
 
 LEADS_HEADERS = [
@@ -64,11 +69,15 @@ if RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET:
 else:
     logger.warning("Razorpay keys not set — /api/create-order and /api/verify-payment will fail until configured.")
 
-# ── LENDER RATE DATA (July 2026) ────────────────────────────────────────
-# NOTE: update this list whenever RBI revises the repo rate or you get fresh
-# partner rate sheets from your DSA network. Single source of truth — the
-# frontend no longer hardcodes rates, it calls /api/calculate-emi.
-LENDER_RATES = [
+# ── LENDER RATE DATA ─────────────────────────────────────────────────────
+# Rates live in a JSON file (RATES_FILE_PATH), not hardcoded here, so you can
+# update them from the /admin/rates web form without touching code or
+# redeploying. On first run (no file yet), these defaults seed the file.
+# NOTE: there is no reliable free API for live Indian bank lending rates —
+# banks revise floating rates mainly after RBI's ~bimonthly MPC meetings, so
+# checking and updating this every couple of months (or when your DSA
+# partners flag a change) is the realistic, sustainable approach.
+DEFAULT_LENDER_RATES = [
     {"name": "SBI (Public Sector)", "rate": 7.35},
     {"name": "PNB / Bank of Baroda", "rate": 7.55},
     {"name": "HDFC Bank", "rate": 7.90},
@@ -76,6 +85,27 @@ LENDER_RATES = [
     {"name": "Kotak Mahindra Bank", "rate": 8.30},
     {"name": "Axis Bank", "rate": 8.60},
 ]
+
+_rates_lock = threading.Lock()
+
+
+def load_lender_rates() -> list:
+    if os.path.exists(RATES_FILE_PATH):
+        try:
+            with open(RATES_FILE_PATH, "r") as f:
+                data = json.load(f)
+            if isinstance(data, list) and data:
+                return data
+        except Exception:
+            logger.exception("Failed to read %s — falling back to defaults", RATES_FILE_PATH)
+    return DEFAULT_LENDER_RATES
+
+
+def save_lender_rates(rates: list) -> None:
+    with _rates_lock:
+        os.makedirs(os.path.dirname(RATES_FILE_PATH) or ".", exist_ok=True)
+        with open(RATES_FILE_PATH, "w") as f:
+            json.dump(rates, f, indent=2)
 
 
 # ── EMI RULES ENGINE ────────────────────────────────────────────────────
@@ -88,17 +118,19 @@ def calculate_emi(principal: float, annual_rate: float, years: float) -> float:
 
 
 def build_calculation(principal: float, current_rate: float, years: float) -> dict:
+    lender_rates = load_lender_rates()
+
     current_emi = calculate_emi(principal, current_rate, years)
     current_total_payment = current_emi * years * 12
     current_total_interest = current_total_payment - principal
 
-    best_lender = min(LENDER_RATES, key=lambda l: l["rate"])
+    best_lender = min(lender_rates, key=lambda l: l["rate"])
     new_emi = calculate_emi(principal, best_lender["rate"], years)
     new_total_payment = new_emi * years * 12
     total_savings = current_total_payment - new_total_payment
     monthly_savings = current_emi - new_emi
 
-    rate_table = sorted(LENDER_RATES, key=lambda l: l["rate"])
+    rate_table = sorted(lender_rates, key=lambda l: l["rate"])
     rate_table_out = [
         {
             "name": l["name"],
@@ -301,6 +333,90 @@ def push_lead_to_sheet(record: dict) -> bool:
     except Exception:
         logger.exception("Failed to append lead to Excel file at %s", LEADS_FILE_PATH)
         return False
+
+
+@app.route("/admin/rates", methods=["GET", "POST"])
+def admin_rates():
+    """
+    Simple password-protected page to view/edit lender rates without touching
+    code or redeploying. Visit /admin/rates?token=YOUR_ADMIN_TOKEN
+    """
+    if not ADMIN_TOKEN:
+        abort(503, description="ADMIN_TOKEN is not configured on this server.")
+    token = request.args.get("token") or request.form.get("token")
+    if token != ADMIN_TOKEN:
+        abort(403)
+
+    message = ""
+    if request.method == "POST":
+        names = request.form.getlist("name")
+        rates = request.form.getlist("rate")
+        new_rates = []
+        try:
+            for name, rate in zip(names, rates):
+                name = name.strip()
+                if not name:
+                    continue
+                new_rates.append({"name": name, "rate": float(rate)})
+            if not new_rates:
+                raise ValueError("At least one lender row is required.")
+            save_lender_rates(new_rates)
+            message = "Rates updated successfully."
+        except ValueError as exc:
+            message = f"Error: {exc}"
+
+    current_rates = load_lender_rates()
+
+    rows_html = "".join(
+        f"""
+        <tr>
+          <td><input type="text" name="name" value="{l['name']}" style="width:220px;padding:6px"></td>
+          <td><input type="number" step="0.01" name="rate" value="{l['rate']}" style="width:90px;padding:6px"></td>
+        </tr>
+        """
+        for l in current_rates
+    )
+
+    # A few blank rows so you can add new lenders without editing HTML
+    blank_rows = "".join(
+        """
+        <tr>
+          <td><input type="text" name="name" value="" style="width:220px;padding:6px" placeholder="Lender name"></td>
+          <td><input type="number" step="0.01" name="rate" value="" style="width:90px;padding:6px" placeholder="Rate %"></td>
+        </tr>
+        """
+        for _ in range(3)
+    )
+
+    html = f"""
+    <html>
+    <head><title>Home Loan Manager — Update Rates</title>
+    <style>
+      body {{ font-family: sans-serif; max-width: 600px; margin: 40px auto; color: #1a1a2e; }}
+      h1 {{ font-size: 20px; }}
+      table {{ border-collapse: collapse; margin: 20px 0; }}
+      th, td {{ padding: 6px 10px; text-align: left; }}
+      button {{ background: #5b6af0; color: #fff; border: none; padding: 10px 20px; border-radius: 6px; font-size: 14px; cursor: pointer; }}
+      .msg {{ padding: 10px; border-radius: 6px; background: #eeeef6; margin-bottom: 10px; }}
+    </style>
+    </head>
+    <body>
+      <h1>Lender Rates</h1>
+      <p>Update starting rates here whenever RBI revises the repo rate or a DSA partner flags a change. No redeploy needed — saved instantly.</p>
+      {'<div class="msg">' + message + '</div>' if message else ''}
+      <form method="POST">
+        <input type="hidden" name="token" value="{token}">
+        <table>
+          <tr><th>Lender Name</th><th>Rate (%)</th></tr>
+          {rows_html}
+          {blank_rows}
+        </table>
+        <button type="submit">Save Rates</button>
+      </form>
+    </body>
+    </html>
+    """
+    return Response(html, mimetype="text/html")
 
 
 @app.route("/admin/leads")
