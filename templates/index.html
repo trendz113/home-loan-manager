@@ -75,6 +75,31 @@ table.rate-table tr:last-child td{border-bottom:none}
 .form-msg{font-size:12.5px;margin-top:.6rem;text-align:center}
 .form-msg.error{color:#c0392b}
 .form-msg.success{color:#146c2e}
+
+/* ── Crossover explainer (inside calculator results) ── */
+.crossover-box{background:var(--accent-bg);border:1px solid var(--accent-border);border-radius:var(--r);padding:1.1rem 1.25rem;margin-bottom:1.25rem}
+.crossover-box .co-label{font-size:10.5px;font-weight:700;color:var(--accent);text-transform:uppercase;letter-spacing:.04em;margin-bottom:.4rem}
+.crossover-box p{font-size:13.5px;color:var(--ink2);line-height:1.55}
+.co-bar-track{display:flex;height:22px;border-radius:6px;overflow:hidden;margin:.75rem 0 .5rem}
+.co-bar-principal{background:var(--green)}
+.co-bar-interest{background:var(--rose)}
+.co-bar-legend{display:flex;gap:1.25rem;font-size:11px;color:var(--mist)}
+.co-bar-legend span{display:inline-flex;align-items:center;gap:5px}
+.co-dot{width:9px;height:9px;border-radius:50%;display:inline-block}
+
+/* ── Learn / borrower-protection accordion ── */
+.learn-card{background:#fff;border:1px solid var(--border);border-radius:var(--r-lg);box-shadow:var(--shadow);overflow:hidden}
+.learn-tabs{display:flex;flex-wrap:wrap;gap:.4rem;padding:1.25rem 1.25rem 0}
+.learn-tab{background:var(--pale);border:1px solid transparent;border-radius:20px;padding:7px 14px;font-size:12.5px;font-weight:600;color:var(--ink3);cursor:pointer;font-family:var(--body)}
+.learn-tab.active{background:var(--accent);color:#fff}
+.learn-body{padding:1.25rem}
+.learn-point{border-bottom:1px solid var(--border);padding:1rem 0}
+.learn-point:last-child{border-bottom:none;padding-bottom:0}
+.learn-point:first-child{padding-top:0}
+.learn-point h4{font-size:14.5px;color:var(--ink);margin-bottom:.35rem}
+.learn-point p{font-size:13px;color:var(--ink3);line-height:1.6}
+.learn-loading{padding:1.25rem;font-size:13px;color:var(--mist);text-align:center}
+.learn-disclaimer{font-size:11px;color:var(--mist);padding:0 1.25rem 1.25rem;line-height:1.5}
 footer{background:var(--ink);color:rgba(255,255,255,.4);text-align:center;padding:2rem 1.5rem;font-size:12px;margin-top:1.5rem}
 footer a{color:rgba(255,255,255,.6);text-decoration:none;margin:0 .75rem}
 @media(max-width:560px){.calc-grid{grid-template-columns:1fr}.nav-cta{display:none}}
@@ -85,7 +110,10 @@ footer a{color:rgba(255,255,255,.6);text-decoration:none;margin:0 .75rem}
 <nav class="nav">
   <div class="nav-inner">
     <a class="nav-brand" href="/">SalaryBit</a>
-    <a class="nav-cta" href="#report">Get personalized report →</a>
+    <div style="display:flex;align-items:center;gap:1.25rem">
+      <a href="#learn" style="font-size:13px;font-weight:600;color:var(--ink3);text-decoration:none">Know Before You Sign</a>
+      <a class="nav-cta" href="#report">Get personalized report →</a>
+    </div>
   </div>
 </nav>
 
@@ -127,6 +155,7 @@ footer a{color:rgba(255,255,255,.6);text-decoration:none;margin:0 .75rem}
     </div>
 
     <div class="results" id="results">
+      <div class="crossover-box" id="crossover-box"></div>
       <div class="result-row" id="current-stats"></div>
       <div class="savings-banner" id="savings-banner"></div>
 
@@ -141,6 +170,18 @@ footer a{color:rgba(255,255,255,.6);text-decoration:none;margin:0 .75rem}
         <div>This is an estimate for informational purposes only, not a loan offer or financial advice. Balance transfer also involves processing fees (typically 0.5%–1% of loan amount) and foreclosure charges from your current lender — factor these in before deciding. Consult a financial advisor for your specific situation.</div>
       </div>
     </div>
+  </div>
+</section>
+
+<section class="section" id="learn">
+  <h2>Know This Before You Sign</h2>
+  <p class="section-sub">Plain-language explanations of what banks make money from, what they don't volunteer, and what actually happens if repayment goes wrong. Written for a first-time borrower, not a finance professional.</p>
+  <div class="learn-card">
+    <div class="learn-tabs" id="learn-tabs"></div>
+    <div class="learn-body" id="learn-body">
+      <div class="learn-loading">Loading…</div>
+    </div>
+    <div class="learn-disclaimer" id="learn-disclaimer"></div>
   </div>
 </section>
 
@@ -252,6 +293,8 @@ function renderResults(data) {
     <div class="result-stat"><div class="v">${data.best_rate}%</div><div class="l">Best Available Rate</div></div>
   `;
 
+  renderCrossoverBox(data);
+
   if (data.worth_switching) {
     document.getElementById('savings-banner').innerHTML = `
       <div><div class="big">${formatINR(data.total_savings)}</div><div class="small">Potential total savings by switching to ${data.best_lender_name}</div></div>
@@ -271,6 +314,79 @@ function renderResults(data) {
   document.getElementById('results').classList.add('show');
   document.getElementById('results').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
+
+function renderCrossoverBox(data) {
+  const box = document.getElementById('crossover-box');
+  const amort = data.amortization;
+  if (!amort || !box) return;
+
+  const pPct = amort.first_year_principal_pct;
+  const iPct = amort.first_year_interest_pct;
+
+  box.innerHTML = `
+    <div class="co-label">What your EMI is really doing</div>
+    <p>${data.crossover_plain_language || ''}</p>
+    <div class="co-bar-track">
+      <div class="co-bar-principal" style="width:${pPct}%"></div>
+      <div class="co-bar-interest" style="width:${iPct}%"></div>
+    </div>
+    <div class="co-bar-legend">
+      <span><i class="co-dot" style="background:var(--green)"></i>Reduces your loan — ${pPct}%</span>
+      <span><i class="co-dot" style="background:var(--rose)"></i>Interest to the bank — ${iPct}%</span>
+    </div>
+  `;
+}
+
+// ── LEARN / BORROWER-PROTECTION SECTION ──
+const LEARN_STAGE_LABELS = {
+  before_you_sign: 'Before You Sign',
+  while_repaying: 'While Repaying',
+  if_you_miss_a_payment: 'If You Miss a Payment',
+  if_you_are_a_guarantor: 'If You\u2019re a Guarantor',
+};
+let learnContent = null;
+let activeLearnStage = 'before_you_sign';
+
+async function loadLearnContent() {
+  const tabsEl = document.getElementById('learn-tabs');
+  const bodyEl = document.getElementById('learn-body');
+  try {
+    const res = await fetch('/api/education');
+    if (!res.ok) throw new Error('Could not load content');
+    learnContent = await res.json();
+
+    tabsEl.innerHTML = Object.keys(LEARN_STAGE_LABELS).map(key =>
+      `<button class="learn-tab${key === activeLearnStage ? ' active' : ''}" data-stage="${key}" onclick="showLearnStage('${key}')">${LEARN_STAGE_LABELS[key]}</button>`
+    ).join('');
+
+    document.getElementById('learn-disclaimer').textContent = learnContent.disclaimer || '';
+    renderLearnStage(activeLearnStage);
+  } catch (e) {
+    bodyEl.innerHTML = '<div class="learn-loading">Could not load this section right now. Please refresh the page.</div>';
+  }
+}
+
+function showLearnStage(stage) {
+  activeLearnStage = stage;
+  document.querySelectorAll('.learn-tab').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.stage === stage);
+  });
+  renderLearnStage(stage);
+}
+
+function renderLearnStage(stage) {
+  const bodyEl = document.getElementById('learn-body');
+  if (!learnContent || !learnContent[stage]) {
+    bodyEl.innerHTML = '<div class="learn-loading">Not available.</div>';
+    return;
+  }
+  const section = learnContent[stage];
+  bodyEl.innerHTML = (section.points || []).map(pt =>
+    `<div class="learn-point"><h4>${pt.heading}</h4><p>${pt.body}</p></div>`
+  ).join('');
+}
+
+document.addEventListener('DOMContentLoaded', loadLearnContent);
 
 // ── PAID REPORT + RAZORPAY ──
 async function startPayment() {
